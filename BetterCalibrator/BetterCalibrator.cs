@@ -1,5 +1,6 @@
 ﻿using System.Numerics;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using OpenTabletDriver;
 using OpenTabletDriver.Plugin;
@@ -162,40 +163,55 @@ public class BetterCalibrator : IPositionedPipelineElement<IDeviceReport> {
         return Math.Abs(a - b);
     }
 
+    private OffsetCell?[] _cellBuf = new OffsetCell?[4];
     public Vector2 filter(Vector2 input) {
-        if(info != null) {
-            Vector2 pos = to_pixel(input);
-            var display = absolute_output_mode.Output;
-            Vector2 cellSize = new Vector2(display.Width/info.cols, display.Height/info.rows);
-            Vector2 cellCenter = cellSize / 2f;
+        if (info == null)
+            return input;
 
-            var sumWeight = 0f;
-            var final = Vector2.Zero;
-            for(var row = 0; row < info.rows; row++) {
-                for(var col = 0; col < info.cols; col++) {
-                    Vector2 cellPos = new(col * cellSize.X, row * cellSize.Y);
-                    Vector2 center = cellCenter + cellPos;
-                    Vector2 dist = Vector2.Abs(center - pos);
+        Vector2 pos = to_pixel(input);
+        var display = absolute_output_mode.Output;
+        Vector2 cellSize = new Vector2(display.Width / info.cols, display.Height / info.rows);
+        Vector2 cellCenter = cellSize / 2f;
 
-                    if (dist.X < cellSize.X && dist.Y < cellSize.Y) {
-                        var cell = info.offsets[col + (row * info.cols)];
-                        var offset = new Vector2(cell[0], cell[1]);
+        Vector2 gridPos = new Vector2(
+            (pos.X * info.cols) / display.Width,
+            (pos.Y * info.rows) / display.Height
+            );
+        Vector2Int gridCell = new Vector2Int((int)gridPos.X, (int)gridPos.Y);
+        Vector2 cellPos = new Vector2(gridPos.X - gridCell.X, gridPos.Y - gridCell.Y);
 
-                        var normalPos = (cellSize - dist) / cellSize;
-                        var weight = normalPos.X * normalPos.Y;
-                        sumWeight += weight;
+        Vector2Int gridDir = new Vector2Int(cellPos.X >= 0.5f ? 1 : -1, cellPos.Y >= 0.5f ? 1 : -1);
+        _cellBuf[0] = info.GetOffset(gridCell.X, gridCell.Y);
+        _cellBuf[1] = info.GetOffset(gridCell.X + gridDir.X, gridCell.Y);
+        _cellBuf[2] = info.GetOffset(gridCell.X, gridCell.Y + gridDir.Y);
+        _cellBuf[3] = info.GetOffset(gridCell.X + gridDir.X, gridCell.Y + gridDir.Y);
 
-                        final -= offset * weight;
-                    }
-                }
-            }
-            // Compensate corners and edges where there are only 1-2 points rather than 4
-            if (sumWeight != 1f)
-                final /= sumWeight;
+        var sumWeight = 0f;
+        var final = Vector2.Zero;
+        foreach (var maybeCell in _cellBuf)
+        {
+            if (maybeCell == null)
+                continue;
+            var cell = maybeCell.Value;
 
-            final -= absolute_output_mode.Output.Position - (new Vector2(absolute_output_mode.Output.Width, absolute_output_mode.Output.Height) / 2f);
-            input -= from_pixel(final);
+            Vector2 center = (cell.GridPos * cellSize) + cellCenter;
+            Vector2 dist = Vector2.Abs(center - pos);
+
+            var normalDist = (cellSize - dist) / cellSize;
+            var weight = normalDist.X * normalDist.Y;
+            if (weight <= 0f)
+                continue;
+
+            final -= cell.Offset * weight;
+            sumWeight += weight;
         }
+        // Compensate corners and edges where there are only 1-2 points rather than 4
+        if (sumWeight != 1f)
+            final /= sumWeight;
+
+        final -= absolute_output_mode.Output.Position - (new Vector2(absolute_output_mode.Output.Width, absolute_output_mode.Output.Height) / 2f);
+        input -= from_pixel(final);
+
         return input;
     }
 
@@ -206,6 +222,50 @@ public class OffsetInfo {
     public int cols { get; set; }
     public int rows { get; set; }
     public float[][] offsets { get; set; }
+
+    public OffsetCell? GetOffset(int col, int row)
+    {
+        if (col < 0 || col >= cols || row < 0 || row >= rows)
+            return null;
+
+        var cell = offsets[col + (row * cols)];
+        return new OffsetCell(new Vector2Int(col, row), new Vector2(cell[0], cell[1]));
+    }
+
+    public OffsetCell? GetOffset(Vector2Int colRow)
+    {
+        return GetOffset(colRow.X, colRow.Y);
+    }
+}
+
+public struct OffsetCell
+{
+    public Vector2Int GridPos;
+    public Vector2 Offset;
+
+    public OffsetCell(Vector2Int gridPos, Vector2 offset)
+    {
+        GridPos = gridPos;
+        Offset = offset;
+    }
+}
+
+public struct Vector2Int
+{
+    public int X;
+    public int Y;
+
+    public Vector2Int(int x, int y)
+    {
+        X = x;
+        Y = y;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector2 operator *(Vector2Int left, Vector2 right)
+    {
+        return new Vector2(left.X * right.X, left.Y * right.Y);
+    }
 }
 
 enum OutputModeType {
