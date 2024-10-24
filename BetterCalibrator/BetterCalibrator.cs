@@ -169,24 +169,29 @@ public class BetterCalibrator : IPositionedPipelineElement<IDeviceReport> {
             Vector2 cellSize = new Vector2(display.Width/info.cols, display.Height/info.rows);
             Vector2 cellCenter = cellSize / 2f;
 
-            Vector2 mov = Vector2.Zero;
-            Vector2 center = Vector2.Zero;
-
+            var sumWeight = 0f;
             var final = Vector2.Zero;
-
             for(var row = 0; row < info.rows; row++) {
                 for(var col = 0; col < info.cols; col++) {
-                    mov.X = col * cellSize.X;
-                    mov.Y = row * cellSize.Y;
-                    center = cellCenter + mov;
+                    Vector2 cellPos = new(col * cellSize.X, row * cellSize.Y);
+                    Vector2 center = cellCenter + cellPos;
+                    Vector2 dist = Vector2.Abs(center - pos);
 
-                    
-                    if(distance(center.X, pos.X) * 2f <= cellSize.X && distance(center.Y, pos.Y) * 2f <= cellSize.Y) {
-                        final.X -= info.offsets[col + (row * info.cols)][0];
-                        final.Y -= info.offsets[col + (row * info.cols)][1];
+                    if (dist.X < cellSize.X && dist.Y < cellSize.Y) {
+                        var cell = info.offsets[col + (row * info.cols)];
+                        var offset = new Vector2(cell[0], cell[1]);
+
+                        var normalPos = (cellSize - dist) / cellSize;
+                        var weight = normalPos.X * normalPos.Y;
+                        sumWeight += weight;
+
+                        final -= offset * weight;
                     }
                 }
             }
+            // Compensate corners and edges where there are only 1-2 points rather than 4
+            if (sumWeight != 1f)
+                final /= sumWeight;
 
             final -= absolute_output_mode.Output.Position - (new Vector2(absolute_output_mode.Output.Width, absolute_output_mode.Output.Height) / 2f);
             input -= from_pixel(final);
