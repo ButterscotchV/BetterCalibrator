@@ -91,10 +91,8 @@ public class BetterCalibrator : IPositionedPipelineElement<IDeviceReport> {
         if(!parsed) {
             parsed = true;
             try {
-                using(StreamReader reader = new StreamReader(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "/offsets.json")) {
-                    string json = reader.ReadToEnd();
-                    info = JsonSerializer.Deserialize<OffsetInfo>(json);
-                }
+                using var reader = File.OpenRead(Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? "", "offsets.json"));
+                info = JsonSerializer.Deserialize<OffsetInfo>(reader)!;
             } catch (Exception exception) {
                 Log.Exception(exception);
             }
